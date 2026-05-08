@@ -1,19 +1,41 @@
-import { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
  import * as pdfjsLib from 'pdfjs-dist';
+ import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min?url';
  import Tesseract from 'tesseract.js';
  import { compareTwoStrings } from 'string-similarity';
- import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min?url';
 
 function App() {
+
+ // =========================================
+ // PDF WORKER
+ // =========================================
+
  useEffect(() => {
  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
  }, []);
 
- const [transactionCertificate, setTransactionCertificate] = useState(null);
- const [ewayBill, setEwayBill] = useState(null);
- const [comparisonResult, setComparisonResult] = useState(null);
- const [isLoading, setIsLoading] = useState(false);
- const [error, setError] = useState(null);
+ // =========================================
+ // STATES
+ // =========================================
+
+ const [transactionCertificate, setTransactionCertificate] =
+ useState(null);
+
+ const [ewayBill, setEwayBill] =
+ useState(null);
+
+ const [comparisonResult, setComparisonResult] =
+ useState([]);
+
+ const [isLoading, setIsLoading] =
+ useState(false);
+
+ const [error, setError] =
+ useState('');
+
+ // =========================================
+ // FILE HANDLERS
+ // =========================================
 
  const handleTransactionCertificateChange = (e) => {
  setTransactionCertificate(e.target.files[0]);
@@ -23,255 +45,612 @@ function App() {
  setEwayBill(e.target.files[0]);
  };
 
+ // =========================================
+ // OCR PDF
+ // =========================================
+
  const extractTextFromPdf = async (file) => {
- const loadingTask = pdfjsLib.getDocument(URL.createObjectURL(file));
+
+ const loadingTask = pdfjsLib.getDocument(
+ URL.createObjectURL(file)
+ );
+
  const pdf = await loadingTask.promise;
- let text = '';
+
+ let fullText = '';
+
  for (let i = 1; i <= pdf.numPages; i++) {
+
  const page = await pdf.getPage(i);
- const viewport = page.getViewport({ scale: 2 });
- const canvas = document.createElement('canvas');
- const context = canvas.getContext('2d');
+
+ const viewport = page.getViewport({
+ scale: 2,
+ });
+
+ const canvas =
+ document.createElement('canvas');
+
+ const context =
+ canvas.getContext('2d');
+
  canvas.height = viewport.height;
  canvas.width = viewport.width;
- await page.render({ canvasContext: context, viewport: viewport }).promise;
- const { data: { text: pageText } } = await Tesseract.recognize(canvas, 'eng');
- text += pageText;
+
+ await page.render({
+ canvasContext: context,
+ viewport,
+ }).promise;
+
+ const {
+ data: { text },
+ } = await Tesseract.recognize(
+ canvas,
+ 'eng'
+ );
+
+ fullText += '\n' + text;
  }
- return text;
+
+ return fullText;
  };
 
+ // =========================================
+ // NORMALIZE DATE
+ // =========================================
+
  const normalizeDate = (dateString) => {
+
  if (!dateString) return '';
- // Check for YYYY-MM-DD format
- if (/^\d{4}-\d{2}-\d{2}/.test(dateString)) {
- return dateString.substring(0, 10);
+
+ const cleaned = dateString.trim();
+
+ // YYYY-MM-DD
+ if (/^\d{4}-\d{2}-\d{2}/.test(cleaned)) {
+ return cleaned.substring(0, 10);
  }
- // Check for DD/MM/YYYY format
- const match = dateString.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+
+ // DD/MM/YYYY
+ const match = cleaned.match(
+ /^(\d{2})\/(\d{2})\/(\d{4})/
+ );
+
  if (match) {
  return `${match[3]}-${match[2]}-${match[1]}`;
  }
- return dateString; // Return original if no match
+
+ return cleaned;
  };
+
+ // =========================================
+ // CLEAN INVOICE
+ // =========================================
+
+ const cleanInvoice = (value) => {
+
+ if (!value) return '';
+
+ const match =
+ value.match(/BTSale-\d+/i);
+
+ return match
+ ? match[0].trim()
+ : value.trim();
+ };
+
+ // =========================================
+ // PARSE SHIPMENT DATA
+ // =========================================
 
  const parseShipmentData = (text, docType) => {
+
  const shipments = [];
- // Make the separator optional to catch "Shipment No." and "Shipment No,"
- const shipmentIdentifier = docType === 'tc' ? /Shipment No[,.]/i : /E-Way Bill No:/i;
- const shipmentBlocks = text.split(shipmentIdentifier).slice(1);
+
+ // =====================================
+ // TRANSACTION CERTIFICATE
+ // =====================================
+
+ if (docType === 'tc') {
+
+ const shipmentBlocks = text.split(
+ /(?=Shipment\s*No[\s:.,-]*\d+)/gi
+ );
 
  shipmentBlocks.forEach((block) => {
+
+ if (!block.includes('Shipment')) {
+ return;
+ }
+
  const shipment = {};
- const patterns = {
- ShipmentDate: /(?:Shipment Date|E-Way Bill Date)[:\s]+(\S+)/i,
- ShipmentDocNo: docType === 'tc' ? /Shipment Doc No\.[:\s]+([\d\s]+)/i : /([\d\s]+)/, // More specific for TC
- InvoiceReferences: /(?:Invoice References|Document No\.)[:\s]+(\S+)/i,
- };
 
- // For e-way bill, the number is the first thing in the block
- if (docType === 'eway') {
- const numMatch = block.match(/^[:\s]*([\d\s]+)/);
- if (numMatch) {
- shipment.ShipmentDocNo = numMatch[0].replace(/\s/g, '').trim();
- }
+ // Shipment Date
+ const dateMatch = block.match(
+ /Shipment\s*Date[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ );
+
+ if (dateMatch) {
+ shipment.ShipmentDate =
+ dateMatch[1].trim();
  }
 
- for (const key in patterns) {
- // Avoid re-matching ShipmentDocNo for e-way bill
- if (docType === 'eway' && key === 'ShipmentDocNo') continue;
+ // Shipment Doc No
+ const docMatch = block.match(
+ /Shipment\s*Doc\s*No\.?[:\s]*([0-9\s]+)/i
+ );
 
- const match = block.match(patterns[key]);
- if (match && match[1]) {
- let value = match[1].trim();
- if (key === 'ShipmentDocNo') {
- value = value.replace(/\s/g, '');
+ if (docMatch) {
+ shipment.ShipmentDocNo =
+ docMatch[1]
+ .replace(/\s/g, '')
+ .trim();
  }
- shipment[key] = value;
+
+ // Invoice Reference
+ const invoiceMatch = block.match(
+ /Invoice\s*References?[:\s]*([A-Za-z0-9-]+)/i
+ );
+
+ if (invoiceMatch) {
+ shipment.InvoiceReferences =
+ invoiceMatch[1].trim();
  }
- }
- if (Object.keys(shipment).length > 0) {
+
+ // Push valid shipment
+ if (
+ shipment.ShipmentDate ||
+ shipment.ShipmentDocNo ||
+ shipment.InvoiceReferences
+ ) {
  shipments.push(shipment);
  }
  });
+ }
+
+ // =====================================
+ // E-WAY BILL
+ // =====================================
+
+ else {
+
+ const ewayBlocks = text.split(
+ /(?=E-Way\s*Bill\s*No[:\s]*)/gi
+ );
+
+ ewayBlocks.forEach((block) => {
+
+ const shipment = {};
+
+ // EWB Number
+ const billMatch = block.match(
+ /E-Way\s*Bill\s*No[:\s]*([0-9\s]+)/i
+ );
+
+ if (billMatch) {
+ shipment.ShipmentDocNo =
+ billMatch[1]
+ .replace(/\s/g, '')
+ .trim();
+ }
+
+ // EWB Date
+ const dateMatch = block.match(
+ /E-Way\s*Bill\s*Date[:\s|]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ );
+
+ if (dateMatch) {
+ shipment.ShipmentDate =
+ dateMatch[1].trim();
+ }
+
+ // Document No
+ const invoiceMatch = block.match(
+ /Document\s*No\.?[:\s]*([A-Za-z0-9-]+)/i
+ );
+
+ if (invoiceMatch) {
+ shipment.InvoiceReferences =
+ invoiceMatch[1].trim();
+ }
+
+ // Push valid shipment
+ if (
+ shipment.ShipmentDate ||
+ shipment.ShipmentDocNo ||
+ shipment.InvoiceReferences
+ ) {
+ shipments.push(shipment);
+ }
+ });
+ }
+
  return shipments;
  };
 
- const handleCompare = async () => {
- if (!transactionCertificate || !ewayBill) return;
+ // =========================================
+ // COMPARE
+ // =========================================
 
- setIsLoading(true);
- setError(null);
- setComparisonResult(null);
+ const handleCompare = async () => {
+
+ if (!transactionCertificate || !ewayBill) {
+ alert('Upload both PDFs');
+ return;
+ }
 
  try {
- const tcText = await extractTextFromPdf(transactionCertificate);
- console.log("Transaction Certificate OCR Text:", tcText);
- const ewayText = await extractTextFromPdf(ewayBill);
- console.log("E-way Bill OCR Text:", ewayText);
 
- const tcShipments = parseShipmentData(tcText, 'tc');
- const ewayShipments = parseShipmentData(ewayText, 'eway');
+ setIsLoading(true);
+ setError('');
+ setComparisonResult([]);
+
+ // OCR TC
+ const tcText =
+ await extractTextFromPdf(
+ transactionCertificate
+ );
+
+ // OCR EWAY
+ const ewayText =
+ await extractTextFromPdf(
+ ewayBill
+ );
+
+ console.log(
+ 'TC OCR TEXT:',
+ tcText
+ );
+
+ console.log(
+ 'EWAY OCR TEXT:',
+ ewayText
+ );
+
+ // Parse
+ const tcShipments =
+ parseShipmentData(
+ tcText,
+ 'tc'
+ );
+
+ const ewayShipments =
+ parseShipmentData(
+ ewayText,
+ 'eway'
+ );
+
+ console.log(
+ 'TC SHIPMENTS:',
+ tcShipments
+ );
+
+ console.log(
+ 'EWAY SHIPMENTS:',
+ ewayShipments
+ );
 
  if (tcShipments.length === 0) {
- throw new Error('No shipments found in the Transaction Certificate.');
+ throw new Error(
+ 'No shipments found in Transaction Certificate'
+ );
  }
+
  if (ewayShipments.length === 0) {
- throw new Error('No shipments found in the E-way Bill.');
+ throw new Error(
+ 'No shipments found in E-Way Bill'
+ );
  }
 
- const fieldsToCompare = ['ShipmentDate', 'ShipmentDocNo', 'InvoiceReferences'];
- const allResults = [];
+ const fieldsToCompare = [
+ 'ShipmentDate',
+ 'ShipmentDocNo',
+ 'InvoiceReferences',
+ ];
 
- tcShipments.forEach((tcShipment, index) => {
- let bestMatch = { score: -1, ewayShipment: null };
+ const results = [];
 
- ewayShipments.forEach(ewayShipment => {
- let currentScore = 0;
- fieldsToCompare.forEach(field => {
- let tcValue = tcShipment[field] || '';
- let ewayValue = ewayShipment[field] || '';
+ tcShipments.forEach(
+ (tcShipment, index) => {
 
- if (field === 'ShipmentDate') {
- tcValue = normalizeDate(tcValue);
- ewayValue = normalizeDate(ewayValue);
+ // Match by invoice number
+ const matchedEway =
+ ewayShipments.find(
+ (eway) =>
+ cleanInvoice(
+ eway.InvoiceReferences
+ )
+ .toLowerCase() ===
+ cleanInvoice(
+ tcShipment.InvoiceReferences
+ )
+ .toLowerCase()
+ );
+
+ const fields = {};
+
+ fieldsToCompare.forEach(
+ (field) => {
+
+ const tcOriginal =
+ tcShipment[field] ||
+ 'Not Found';
+
+ const ewayOriginal =
+ matchedEway
+ ? matchedEway[field] ||
+ 'Not Found'
+ : 'Not Found';
+
+ let tcCompare =
+ tcOriginal;
+
+ let ewayCompare =
+ ewayOriginal;
+
+ // Normalize date
+ if (
+ field === 'ShipmentDate'
+ ) {
+ tcCompare =
+ normalizeDate(
+ tcCompare
+ );
+
+ ewayCompare =
+ normalizeDate(
+ ewayCompare
+ );
  }
 
- currentScore += compareTwoStrings(tcValue.toLowerCase(), ewayValue.toLowerCase());
- });
+ // Clean invoice
+ if (
+ field ===
+ 'InvoiceReferences'
+ ) {
+ tcCompare =
+ cleanInvoice(
+ tcCompare
+ );
 
- if (currentScore > bestMatch.score) {
- bestMatch = { score: currentScore, ewayShipment };
- }
- });
-
- const results = { shipmentId: `TC Shipment ${index + 1}`, fields: {} };
- fieldsToCompare.forEach(field => {
- const originalTcValue = tcShipment[field] || 'Not Found';
- const originalEwayValue = bestMatch.ewayShipment ? (bestMatch.ewayShipment[field] || 'Not Found') : 'Not Found';
-
- let tcValueForCompare = originalTcValue;
- let ewayValueForCompare = originalEwayValue;
-
- if (field === 'ShipmentDate') {
- tcValueForCompare = normalizeDate(tcValueForCompare);
- ewayValueForCompare = normalizeDate(ewayValueForCompare);
+ ewayCompare =
+ cleanInvoice(
+ ewayCompare
+ );
  }
 
- const similarity = compareTwoStrings(tcValueForCompare.toLowerCase(), ewayValueForCompare.toLowerCase());
- results.fields[field] = {
- tcValue: originalTcValue,
- ewayValue: originalEwayValue,
- match: similarity > 0.8,
- similarity: (similarity * 100).toFixed(2) + '%',
+ const similarity =
+ compareTwoStrings(
+ tcCompare
+ .toLowerCase(),
+ ewayCompare
+ .toLowerCase()
+ );
+
+ fields[field] = {
+ tcValue: tcOriginal,
+ ewayValue:
+ ewayOriginal,
+ match:
+ tcCompare ===
+ ewayCompare,
+ similarity:
+ (
+ similarity * 100
+ ).toFixed(2) + '%',
  };
- });
- allResults.push(results);
- });
+ }
+ );
 
- setComparisonResult(allResults);
+ results.push({
+ shipmentId:
+ `TC Shipment ${
+ index + 1
+ }`,
+ fields,
+ });
+ }
+ );
+
+ setComparisonResult(results);
 
  } catch (err) {
+
  console.error(err);
- setError('An error occurred while processing the documents. Please try again.');
+
+ setError(
+ err.message ||
+ 'Error while comparing documents'
+ );
+
  } finally {
+
  setIsLoading(false);
  }
  };
 
+ // =========================================
+ // UI
+ // =========================================
+
  return (
- <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center">
- <div className="max-w-4xl w-full bg-white p-8 rounded-lg shadow-md">
- <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">
+ <div className="min-h-screen bg-gray-100 p-10">
+
+ <div className="max-w-7xl mx-auto bg-white p-8 rounded-lg shadow-lg">
+
+ <h1 className="text-3xl font-bold mb-8 text-center">
  Shipment Information Verification
  </h1>
- <div className="space-y-6">
- <div>
- <label
- htmlFor="transaction-certificate"
- className="block text-sm font-medium text-gray-700 mb-2"
- >
- Upload Transaction Certificate Draft
+
+ {/* Upload TC */}
+ <div className="mb-6">
+
+ <label className="block text-sm font-semibold mb-2">
+ Upload Transaction Certificate PDF
  </label>
+
  <input
- id="transaction-certificate"
  type="file"
- onChange={handleTransactionCertificateChange}
- className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+ accept=".pdf"
+ onChange={
+ handleTransactionCertificateChange
+ }
+ className="w-full border p-3 rounded"
  />
  </div>
- <div>
- <label
- htmlFor="eway-bill"
- className="block text-sm font-medium text-gray-700 mb-2"
- >
- Upload E-way Bill
+
+ {/* Upload EWB */}
+ <div className="mb-6">
+
+ <label className="block text-sm font-semibold mb-2">
+ Upload E-Way Bill PDF
  </label>
+
  <input
- id="eway-bill"
  type="file"
+ accept=".pdf"
  onChange={handleEwayBillChange}
- className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+ className="w-full border p-3 rounded"
  />
  </div>
- <div>
+
+ {/* Button */}
  <button
  onClick={handleCompare}
- disabled={!transactionCertificate || !ewayBill}
- className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+ disabled={isLoading}
+ className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded font-semibold"
  >
- Compare Documents
+ {isLoading
+ ? 'Processing PDFs...'
+ : 'Compare Documents'}
  </button>
- </div>
- </div>
 
+ {/* Loading */}
  {isLoading && (
- <div className="mt-6 text-center">
- <p className="text-lg text-gray-600">Comparing documents, please wait...</p>
+ <div className="mt-6 text-blue-600 font-semibold">
+ OCR Processing...
  </div>
  )}
 
+ {/* Error */}
  {error && (
- <div className="mt-6 p-4 bg-red-100 text-red-700 rounded-lg">
- <p>{error}</p>
+ <div className="mt-6 bg-red-100 text-red-700 p-4 rounded">
+ {error}
  </div>
  )}
 
- {comparisonResult && (
- <div className="mt-8">
- <h2 className="text-2xl font-bold mb-4 text-gray-800">Comparison Result</h2>
- {comparisonResult.map((result) => (
- <div key={result.shipmentId} className="mb-6 overflow-x-auto">
- <h3 className="text-xl font-semibold mb-2 text-gray-700">{result.shipmentId}</h3>
- <table className="min-w-full bg-white border border-gray-200">
- <thead>
- <tr className="bg-gray-50">
- <th className="py-3 px-4 border-b text-left text-sm font-semibold text-gray-600">Field</th>
- <th className="py-3 px-4 border-b text-left text-sm font-semibold text-gray-600">Transaction Certificate</th>
- <th className="py-3 px-4 border-b text-left text-sm font-semibold text-gray-600">E-way Bill</th>
- <th className="py-3 px-4 border-b text-left text-sm font-semibold text-gray-600">Match</th>
- <th className="py-3 px-4 border-b text-left text-sm font-semibold text-gray-600">Similarity</th>
+ {/* Results */}
+ {comparisonResult.length > 0 && (
+
+ <div className="mt-10">
+
+ <h2 className="text-2xl font-bold mb-6">
+ Comparison Results
+ </h2>
+
+ {comparisonResult.map(
+ (result) => (
+
+ <div
+ key={
+ result.shipmentId
+ }
+ className="mb-10 overflow-x-auto"
+ >
+
+ <h3 className="text-xl font-semibold mb-3">
+ {result.shipmentId}
+ </h3>
+
+ <table className="min-w-full border border-gray-300">
+
+ <thead className="bg-gray-100">
+
+ <tr>
+
+ <th className="border p-3 text-left">
+ Field
+ </th>
+
+ <th className="border p-3 text-left">
+ Transaction Certificate
+ </th>
+
+ <th className="border p-3 text-left">
+ E-Way Bill
+ </th>
+
+ <th className="border p-3 text-left">
+ Match
+ </th>
+
+ <th className="border p-3 text-left">
+ Similarity
+ </th>
+
  </tr>
+
  </thead>
+
  <tbody>
- {Object.entries(result.fields).map(([field, values]) => (
- <tr key={field} className="hover:bg-gray-50">
- <td className="py-3 px-4 border-b text-sm text-gray-700 font-medium">{field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</td>
- <td className="py-3 px-4 border-b text-sm text-gray-700">{values.tcValue}</td>
- <td className="py-3 px-4 border-b text-sm text-gray-700">{values.ewayValue}</td>
- <td className={`py-3 px-4 border-b text-sm font-bold ${values.match ? 'text-green-600' : 'text-red-600'}`}>
- {values.match ? 'Yes' : 'No'}
+
+ {Object.entries(
+ result.fields
+ ).map(
+ ([
+ field,
+ values,
+ ]) => (
+
+ <tr
+ key={field}
+ >
+
+ <td className="border p-3 font-medium">
+ {field}
  </td>
- <td className="py-3 px-4 border-b text-sm text-gray-700">{values.similarity}</td>
+
+ <td className="border p-3">
+ {
+ values.tcValue
+ }
+ </td>
+
+ <td className="border p-3">
+ {
+ values.ewayValue
+ }
+ </td>
+
+ <td
+ className={`border p-3 font-bold ${
+ values.match
+ ? 'text-green-600'
+ : 'text-red-600'
+ }`}
+ >
+ {values.match
+ ? 'Yes'
+ : 'No'}
+ </td>
+
+ <td className="border p-3">
+ {
+ values.similarity
+ }
+ </td>
+
  </tr>
- ))}
- </tbody>
- </table>
- </div>
- ))}
- </div>
+ )
  )}
 
+ </tbody>
+
+ </table>
+
+ </div>
+ )
+ )}
+ </div>
+ )}
  </div>
  </div>
  );
