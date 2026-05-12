@@ -73,8 +73,8 @@ function App() {
  const context =
  canvas.getContext('2d');
 
- canvas.height = viewport.height;
  canvas.width = viewport.width;
+ canvas.height = viewport.height;
 
  await page.render({
  canvasContext: context,
@@ -87,7 +87,7 @@ function App() {
  canvas,
  'eng',
  {
- logger: m => console.log(m)
+ logger: m => console.log(m),
  }
  );
 
@@ -105,15 +105,19 @@ function App() {
 
  if (!dateString) return '';
 
- const cleaned = dateString.trim();
+ const cleaned =
+ dateString.trim();
 
  // YYYY-MM-DD
- if (/^\d{4}-\d{2}-\d{2}/.test(cleaned)) {
- return cleaned.substring(0, 10);
+ if (
+ /^\d{4}-\d{2}-\d{2}$/.test(cleaned)
+ ) {
+ return cleaned;
  }
 
  // DD/MM/YYYY
- const match = cleaned.match(
+ const match =
+ cleaned.match(
  /^(\d{2})\/(\d{2})\/(\d{4})/
  );
 
@@ -153,7 +157,7 @@ function App() {
  };
 
  // =========================================
- // PARSE TC
+ // PARSE TC DATA
  // =========================================
 
  const parseTCData = (text) => {
@@ -170,32 +174,39 @@ function App() {
 
  // Shipment Date
  const dateMatch = block.match(
- /Shipment\s*Date[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})/i
+ /Shipment\s*Date\s*[:|-]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i
  );
 
  if (dateMatch) {
+
  shipment.ShipmentDate =
- dateMatch[1];
+ dateMatch[1].trim();
  }
 
  // Shipment Doc No
  const docMatch = block.match(
- /Shipment\s*Doc\s*No\.?[:\s]*([0-9\s]+)/i
+ /Shipment\s*Doc\s*No\.?\s*[:|-]?\s*([0-9 ]+)/i
  );
 
  if (docMatch) {
+
  shipment.ShipmentDocNo =
- cleanDocNumber(docMatch[1]);
+ cleanDocNumber(
+ docMatch[1]
+ );
  }
 
- // Invoice
+ // Invoice References
  const invoiceMatch = block.match(
- /Invoice\s*References?[:\s]*([A-Za-z0-9-]+)/i
+ /Invoice\s*References?\s*[:|-]?\s*([A-Za-z0-9-]+)/i
  );
 
  if (invoiceMatch) {
+
  shipment.InvoiceReferences =
- cleanInvoice(invoiceMatch[1]);
+ cleanInvoice(
+ invoiceMatch[1]
+ );
  }
 
  if (
@@ -211,46 +222,91 @@ function App() {
  };
 
  // =========================================
- // PARSE EWAY
+ // PARSE EWAY DATA
  // =========================================
 
  const parseEwayData = (text) => {
 
  const shipments = [];
 
- // Match each EWB block properly
- const regex =
- /E-Way\s*Bill\s*No[:\s]*([0-9\s]+)[\s\S]*?E-Way\s*Bill\s*Date[:\s|]*([0-9\/]+)[\s\S]*?Document\s*No\.?[:\s]*([A-Za-z0-9-]+)/gi;
+ const blocks = text.split(
+ /(?=E-Way\s*Bill\s*No)/gi
+ );
 
- let match;
+ blocks.forEach((block) => {
 
- while ((match = regex.exec(text)) !== null) {
+ const shipment = {};
 
- const shipment = {
- ShipmentDocNo:
- cleanDocNumber(match[1]),
+ // =====================================
+ // EWAY BILL NUMBER
+ // =====================================
 
- ShipmentDate:
- match[2].trim(),
+ const billMatch = block.match(
+ /E-Way\s*Bill\s*No\.?\s*[:|-]?\s*([0-9 ]{10,20})/i
+ );
 
- InvoiceReferences:
- cleanInvoice(match[3]),
- };
+ if (billMatch) {
 
+ shipment.ShipmentDocNo =
+ cleanDocNumber(
+ billMatch[1]
+ );
+ }
+
+ // =====================================
+ // EWAY BILL DATE
+ // =====================================
+
+ const dateMatch = block.match(
+ /E-Way\s*Bill\s*Date\s*[:|.-]?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ );
+
+ if (dateMatch) {
+
+ shipment.ShipmentDate =
+ dateMatch[1].trim();
+ }
+
+ // =====================================
+ // DOCUMENT NUMBER
+ // =====================================
+
+ const invoiceMatch = block.match(
+ /Document\s*No\.?\s*[:|.-]?\s*([A-Za-z0-9-]+)/i
+ );
+
+ if (invoiceMatch) {
+
+ shipment.InvoiceReferences =
+ cleanInvoice(
+ invoiceMatch[1]
+ );
+ }
+
+ // =====================================
+ // PUSH
+ // =====================================
+
+ if (
+ shipment.ShipmentDocNo ||
+ shipment.ShipmentDate ||
+ shipment.InvoiceReferences
+ ) {
  shipments.push(shipment);
  }
+ });
 
  return shipments;
  };
 
  // =========================================
- // COMPARE
+ // COMPARE DOCUMENTS
  // =========================================
 
  const handleCompare = async () => {
 
  if (!transactionCertificate || !ewayBill) {
- alert('Upload both PDFs');
+ alert('Please upload both PDFs');
  return;
  }
 
@@ -260,29 +316,58 @@ function App() {
  setError('');
  setComparisonResult([]);
 
- // OCR
+ // OCR TC
  const tcText =
  await extractTextFromPdf(
  transactionCertificate
  );
 
+ // OCR EWAY
  const ewayText =
  await extractTextFromPdf(
  ewayBill
  );
 
- console.log('TC OCR:', tcText);
- console.log('EWAY OCR:', ewayText);
+ console.log(
+ 'TC OCR TEXT:',
+ tcText
+ );
 
- // Parse
+ console.log(
+ 'EWAY OCR TEXT:',
+ ewayText
+ );
+
+ // Parse data
  const tcShipments =
  parseTCData(tcText);
 
  const ewayShipments =
  parseEwayData(ewayText);
 
- console.log('TC SHIPMENTS:', tcShipments);
- console.log('EWAY SHIPMENTS:', ewayShipments);
+ console.log(
+ 'TC SHIPMENTS'
+ );
+
+ console.table(tcShipments);
+
+ console.log(
+ 'EWAY SHIPMENTS'
+ );
+
+ console.table(ewayShipments);
+
+ if (tcShipments.length === 0) {
+ throw new Error(
+ 'No shipments found in Transaction Certificate'
+ );
+ }
+
+ if (ewayShipments.length === 0) {
+ throw new Error(
+ 'No shipments found in E-Way Bill'
+ );
+ }
 
  const fieldsToCompare = [
  'ShipmentDate',
@@ -295,7 +380,7 @@ function App() {
  tcShipments.forEach(
  (tcShipment, index) => {
 
- // Match using invoice
+ // Match using invoice number
  const matchedEway =
  ewayShipments.find(
  (eway) =>
@@ -328,11 +413,12 @@ function App() {
  let ewayCompare =
  ewayOriginal;
 
- // Normalize dates
+ // Normalize date
  if (
  field ===
  'ShipmentDate'
  ) {
+
  tcCompare =
  normalizeDate(
  tcCompare
@@ -344,11 +430,12 @@ function App() {
  );
  }
 
- // Normalize doc no
+ // Normalize Doc Number
  if (
  field ===
  'ShipmentDocNo'
  ) {
+
  tcCompare =
  cleanDocNumber(
  tcCompare
@@ -360,11 +447,12 @@ function App() {
  );
  }
 
- // Normalize invoice
+ // Normalize Invoice
  if (
  field ===
  'InvoiceReferences'
  ) {
+
  tcCompare =
  cleanInvoice(
  tcCompare
@@ -383,12 +471,16 @@ function App() {
  );
 
  fields[field] = {
- tcValue: tcOriginal,
+ tcValue:
+ tcOriginal,
+
  ewayValue:
  ewayOriginal,
+
  match:
  tcCompare ===
  ewayCompare,
+
  similarity:
  (
  similarity * 100
@@ -413,7 +505,7 @@ function App() {
 
  setError(
  err.message ||
- 'Error while comparing documents'
+ 'Error comparing documents'
  );
 
  } finally {
@@ -452,7 +544,7 @@ function App() {
  />
  </div>
 
- {/* Upload EWB */}
+ {/* Upload EWAY */}
  <div className="mb-6">
 
  <label className="block text-sm font-semibold mb-2">
@@ -462,7 +554,9 @@ function App() {
  <input
  type="file"
  accept=".pdf"
- onChange={handleEwayBillChange}
+ onChange={
+ handleEwayBillChange
+ }
  className="w-full border p-3 rounded"
  />
  </div>
@@ -477,6 +571,13 @@ function App() {
  ? 'Processing PDFs...'
  : 'Compare Documents'}
  </button>
+
+ {/* Loading */}
+ {isLoading && (
+ <div className="mt-6 text-blue-600 font-semibold">
+ OCR Processing...
+ </div>
+ )}
 
  {/* Error */}
  {error && (
@@ -597,8 +698,10 @@ function App() {
  </div>
  )
  )}
+
  </div>
  )}
+
  </div>
  </div>
  );
