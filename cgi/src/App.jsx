@@ -11,81 +11,119 @@ function App() {
  // =========================================
 
  useEffect(() => {
- pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+ pdfjsLib.GlobalWorkerOptions.workerSrc =
+ pdfjsWorker;
  }, []);
 
  // =========================================
  // STATES
  // =========================================
 
- const [transactionCertificate, setTransactionCertificate] =
- useState(null);
+ const [
+ transactionCertificate,
+ setTransactionCertificate,
+ ] = useState(null);
 
- const [ewayBill, setEwayBill] =
- useState(null);
+ const [
+ ewayBill,
+ setEwayBill,
+ ] = useState(null);
 
- const [comparisonResult, setComparisonResult] =
- useState([]);
+ const [
+ comparisonResult,
+ setComparisonResult,
+ ] = useState([]);
 
- const [isLoading, setIsLoading] =
- useState(false);
+ const [
+ isLoading,
+ setIsLoading,
+ ] = useState(false);
 
- const [error, setError] =
- useState('');
+ const [
+ error,
+ setError,
+ ] = useState('');
 
  // =========================================
  // FILE HANDLERS
  // =========================================
 
- const handleTransactionCertificateChange = (e) => {
- setTransactionCertificate(e.target.files[0]);
+ const handleTransactionCertificateChange = (
+ e
+ ) => {
+ setTransactionCertificate(
+ e.target.files[0]
+ );
  };
 
  const handleEwayBillChange = (e) => {
- setEwayBill(e.target.files[0]);
+ setEwayBill(
+ e.target.files[0]
+ );
  };
 
  // =========================================
  // OCR PDF
  // =========================================
 
- const extractTextFromPdf = async (file) => {
+ const extractTextFromPdf = async (
+ file
+ ) => {
 
- const loadingTask = pdfjsLib.getDocument(
+ const loadingTask =
+ pdfjsLib.getDocument(
  URL.createObjectURL(file)
  );
 
- const pdf = await loadingTask.promise;
+ const pdf =
+ await loadingTask.promise;
 
  let fullText = '';
 
- for (let i = 1; i <= pdf.numPages; i++) {
+ for (
+ let i = 1;
+ i <= pdf.numPages;
+ i++
+ ) {
 
- const page = await pdf.getPage(i);
+ const page =
+ await pdf.getPage(i);
 
- const viewport = page.getViewport({
- scale: 2,
+ const viewport =
+ page.getViewport({
+ scale: 3,
  });
 
  const canvas =
- document.createElement('canvas');
+ document.createElement(
+ 'canvas'
+ );
 
  const context =
  canvas.getContext('2d');
 
- canvas.height = viewport.height;
- canvas.width = viewport.width;
+ canvas.width =
+ viewport.width;
+
+ canvas.height =
+ viewport.height;
 
  await page.render({
- canvasContext: context,
+ canvasContext:
+ context,
  viewport,
  }).promise;
 
  const {
  data: { text },
- } = await Tesseract.recognize(
+ } =
+ await Tesseract.recognize(
  canvas,
- 'eng'
+ 'eng',
+ {
+ logger: (m) =>
+ console.log(m),
+ }
  );
 
  fullText += '\n' + text;
@@ -98,23 +136,32 @@ function App() {
  // NORMALIZE DATE
  // =========================================
 
- const normalizeDate = (dateString) => {
+ const normalizeDate = (
+ dateString
+ ) => {
 
  if (!dateString) return '';
 
- const cleaned = dateString.trim();
+ const cleaned =
+ dateString.trim();
 
  // YYYY-MM-DD
- if (/^\d{4}-\d{2}-\d{2}/.test(cleaned)) {
- return cleaned.substring(0, 10);
+ if (
+ /^\d{4}-\d{2}-\d{2}$/.test(
+ cleaned
+ )
+ ) {
+ return cleaned;
  }
 
  // DD/MM/YYYY
- const match = cleaned.match(
+ const match =
+ cleaned.match(
  /^(\d{2})\/(\d{2})\/(\d{4})/
  );
 
  if (match) {
+
  return `${match[3]}-${match[2]}-${match[1]}`;
  }
 
@@ -122,158 +169,276 @@ function App() {
  };
 
  // =========================================
- // CLEAN INVOICE
+ // CLEAN DOC NUMBER
  // =========================================
 
- const cleanInvoice = (value) => {
+ const cleanDocNumber = (
+ value
+ ) => {
 
  if (!value) return '';
 
- const match =
- value.match(/BTSale-\d+/i);
-
- return match
- ? match[0].trim()
- : value.trim();
+ return value
+ .replace(/\s/g, '')
+ .replace(/[^0-9]/g, '')
+ .trim();
  };
 
  // =========================================
- // PARSE SHIPMENT DATA
+ // CLEAN INVOICE
  // =========================================
 
- const parseShipmentData = (text, docType) => {
+ const cleanInvoice = (
+ value
+ ) => {
+
+ if (!value) return '';
+
+ return value
+ .replace(/\s/g, '')
+ .replace(
+ /[^A-Za-z0-9-]/g,
+ ''
+ )
+ .trim()
+ .toUpperCase();
+ };
+
+ // =========================================
+ // PARSE TC DATA
+ // =========================================
+
+ const parseTCData = (text) => {
 
  const shipments = [];
 
- // =====================================
- // TRANSACTION CERTIFICATE
- // =====================================
-
- if (docType === 'tc') {
-
- const shipmentBlocks = text.split(
- /(?=Shipment\s*No[\s:.,-]*\d+)/gi
+ const blocks = text.split(
+ /(?=Shipment\s*No)/gi
  );
 
- shipmentBlocks.forEach((block) => {
-
- if (!block.includes('Shipment')) {
- return;
- }
+ blocks.forEach((block) => {
 
  const shipment = {};
 
- // Shipment Date
- const dateMatch = block.match(
- /Shipment\s*Date[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ // =====================================
+ // DATE
+ // =====================================
+
+ const dateMatch =
+ block.match(
+ /Shipment\s*Date\s*[:|-]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
  );
 
  if (dateMatch) {
+
  shipment.ShipmentDate =
  dateMatch[1].trim();
  }
 
- // Shipment Doc No
- const docMatch = block.match(
- /Shipment\s*Doc\s*No\.?[:\s]*([0-9\s]+)/i
+ // =====================================
+ // DOC NUMBER
+ // =====================================
+
+ const docMatch =
+ block.match(
+ /Shipment\s*Doc\s*No\.?\s*[:|-]?\s*([0-9 ]+)/i
  );
 
  if (docMatch) {
+
  shipment.ShipmentDocNo =
+ cleanDocNumber(
  docMatch[1]
- .replace(/\s/g, '')
- .trim();
+ );
  }
 
- // Invoice Reference
- const invoiceMatch = block.match(
- /Invoice\s*References?[:\s]*([A-Za-z0-9-]+)/i
+ // =====================================
+ // INVOICE
+ // =====================================
+
+ const invoiceMatch =
+ block.match(
+ /Invoice\s*References?\s*[:|-]?\s*([A-Za-z0-9-]+)/i
  );
 
  if (invoiceMatch) {
+
  shipment.InvoiceReferences =
- invoiceMatch[1].trim();
+ cleanInvoice(
+ invoiceMatch[1]
+ );
  }
 
- // Push valid shipment
+ // =====================================
+ // PUSH
+ // =====================================
+
  if (
- shipment.ShipmentDate ||
- shipment.ShipmentDocNo ||
- shipment.InvoiceReferences
+ shipment.ShipmentDocNo
  ) {
- shipments.push(shipment);
+ shipments.push(
+ shipment
+ );
  }
  });
- }
 
- // =====================================
- // E-WAY BILL
- // =====================================
+ return shipments;
+ };
 
- else {
+ // =========================================
+ // PARSE EWAY DATA
+ // =========================================
 
- const ewayBlocks = text.split(
- /(?=E-Way\s*Bill\s*No[:\s]*)/gi
+ const parseEwayData = (text) => {
+
+ const shipments = [];
+
+ const blocks = text.split(
+ /(?=E-Way\s*Bill\s*No)/gi
  );
 
- ewayBlocks.forEach((block) => {
+ blocks.forEach((block) => {
 
  const shipment = {};
 
- // EWB Number
- const billMatch = block.match(
- /E-Way\s*Bill\s*No[:\s]*([0-9\s]+)/i
+ // =====================================
+ // EWAY NUMBER
+ // =====================================
+
+ const billMatch =
+ block.match(
+ /E-Way\s*Bill\s*No\.?\s*[:|]?\s*([0-9 ]{10,20})/i
  );
 
  if (billMatch) {
+
  shipment.ShipmentDocNo =
+ cleanDocNumber(
  billMatch[1]
- .replace(/\s/g, '')
- .trim();
+ );
  }
 
- // EWB Date
- const dateMatch = block.match(
- /E-Way\s*Bill\s*Date[:\s|]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ // =====================================
+ // DATE
+ // =====================================
+
+ const dateMatch =
+ block.match(
+ /E-Way\s*Bill\s*Date\s*[:|]?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
  );
 
  if (dateMatch) {
+
  shipment.ShipmentDate =
  dateMatch[1].trim();
  }
 
- // Document No
- const invoiceMatch = block.match(
- /Document\s*No\.?[:\s]*([A-Za-z0-9-]+)/i
+ // =====================================
+ // DOCUMENT NO
+ // =====================================
+
+ const invoiceMatch =
+ block.match(
+ /Document\s*No\.?\s*[:|]?\s*([A-Za-z0-9-]+)/i
  );
 
  if (invoiceMatch) {
+
  shipment.InvoiceReferences =
- invoiceMatch[1].trim();
+ cleanInvoice(
+ invoiceMatch[1]
+ );
  }
 
- // Push valid shipment
+ // =====================================
+ // PUSH
+ // =====================================
+
  if (
- shipment.ShipmentDate ||
- shipment.ShipmentDocNo ||
- shipment.InvoiceReferences
+ shipment.ShipmentDocNo
  ) {
- shipments.push(shipment);
+ shipments.push(
+ shipment
+ );
  }
  });
- }
 
  return shipments;
+ };
+
+ // =========================================
+ // FIND MATCH
+ // =========================================
+
+ const findMatchingEway = (
+ tcShipment,
+ ewayShipments
+ ) => {
+
+ return ewayShipments.find(
+ (eway) => {
+
+ // ===============================
+ // MATCH DOC NUMBER
+ // ===============================
+
+ const tcDoc =
+ cleanDocNumber(
+ tcShipment.ShipmentDocNo
+ );
+
+ const ewayDoc =
+ cleanDocNumber(
+ eway.ShipmentDocNo
+ );
+
+ if (
+ tcDoc &&
+ ewayDoc &&
+ tcDoc === ewayDoc
+ ) {
+ return true;
+ }
+
+ // ===============================
+ // MATCH INVOICE
+ // ===============================
+
+ const tcInvoice =
+ cleanInvoice(
+ tcShipment.InvoiceReferences
+ );
+
+ const ewayInvoice =
+ cleanInvoice(
+ eway.InvoiceReferences
+ );
+
+ const similarity =
+ compareTwoStrings(
+ tcInvoice.toLowerCase(),
+ ewayInvoice.toLowerCase()
+ );
+
+ return similarity > 0.7;
+ }
+ );
  };
 
  // =========================================
  // COMPARE
  // =========================================
 
- const handleCompare = async () => {
+ const handleCompare =
+ async () => {
 
- if (!transactionCertificate || !ewayBill) {
- alert('Upload both PDFs');
+ if (
+ !transactionCertificate ||
+ !ewayBill
+ ) {
+ alert(
+ 'Please upload both PDFs'
+ );
  return;
  }
 
@@ -281,7 +446,9 @@ function App() {
 
  setIsLoading(true);
  setError('');
- setComparisonResult([]);
+ setComparisonResult(
+ []
+ );
 
  // OCR TC
  const tcText =
@@ -305,42 +472,51 @@ function App() {
  ewayText
  );
 
- // Parse
+ // PARSE
  const tcShipments =
- parseShipmentData(
- tcText,
- 'tc'
+ parseTCData(
+ tcText
  );
 
  const ewayShipments =
- parseShipmentData(
- ewayText,
- 'eway'
+ parseEwayData(
+ ewayText
  );
 
  console.log(
- 'TC SHIPMENTS:',
+ 'TC SHIPMENTS'
+ );
+
+ console.table(
  tcShipments
  );
 
  console.log(
- 'EWAY SHIPMENTS:',
+ 'EWAY SHIPMENTS'
+ );
+
+ console.table(
  ewayShipments
  );
 
- if (tcShipments.length === 0) {
+ if (
+ tcShipments.length === 0
+ ) {
  throw new Error(
- 'No shipments found in Transaction Certificate'
+ 'No shipments found in TC'
  );
  }
 
- if (ewayShipments.length === 0) {
+ if (
+ ewayShipments.length === 0
+ ) {
  throw new Error(
- 'No shipments found in E-Way Bill'
+ 'No shipments found in EWAY'
  );
  }
 
- const fieldsToCompare = [
+ const fieldsToCompare =
+ [
  'ShipmentDate',
  'ShipmentDocNo',
  'InvoiceReferences',
@@ -349,20 +525,15 @@ function App() {
  const results = [];
 
  tcShipments.forEach(
- (tcShipment, index) => {
+ (
+ tcShipment,
+ index
+ ) => {
 
- // Match by invoice number
  const matchedEway =
- ewayShipments.find(
- (eway) =>
- cleanInvoice(
- eway.InvoiceReferences
- )
- .toLowerCase() ===
- cleanInvoice(
- tcShipment.InvoiceReferences
- )
- .toLowerCase()
+ findMatchingEway(
+ tcShipment,
+ ewayShipments
  );
 
  const fields = {};
@@ -371,12 +542,16 @@ function App() {
  (field) => {
 
  const tcOriginal =
- tcShipment[field] ||
+ tcShipment[
+ field
+ ] ||
  'Not Found';
 
  const ewayOriginal =
  matchedEway
- ? matchedEway[field] ||
+ ? matchedEway[
+ field
+ ] ||
  'Not Found'
  : 'Not Found';
 
@@ -386,10 +561,15 @@ function App() {
  let ewayCompare =
  ewayOriginal;
 
- // Normalize date
+ // =========================
+ // NORMALIZE DATE
+ // =========================
+
  if (
- field === 'ShipmentDate'
+ field ===
+ 'ShipmentDate'
  ) {
+
  tcCompare =
  normalizeDate(
  tcCompare
@@ -401,11 +581,35 @@ function App() {
  );
  }
 
- // Clean invoice
+ // =========================
+ // NORMALIZE DOC NUMBER
+ // =========================
+
+ if (
+ field ===
+ 'ShipmentDocNo'
+ ) {
+
+ tcCompare =
+ cleanDocNumber(
+ tcCompare
+ );
+
+ ewayCompare =
+ cleanDocNumber(
+ ewayCompare
+ );
+ }
+
+ // =========================
+ // NORMALIZE INVOICE
+ // =========================
+
  if (
  field ===
  'InvoiceReferences'
  ) {
+
  tcCompare =
  cleanInvoice(
  tcCompare
@@ -419,38 +623,45 @@ function App() {
 
  const similarity =
  compareTwoStrings(
- tcCompare
- .toLowerCase(),
- ewayCompare
- .toLowerCase()
+ tcCompare.toLowerCase(),
+ ewayCompare.toLowerCase()
  );
 
- fields[field] = {
- tcValue: tcOriginal,
+ fields[
+ field
+ ] = {
+ tcValue:
+ tcOriginal,
+
  ewayValue:
  ewayOriginal,
+
  match:
  tcCompare ===
  ewayCompare,
+
  similarity:
  (
- similarity * 100
- ).toFixed(2) + '%',
+ similarity *
+ 100
+ ).toFixed(
+ 2
+ ) + '%',
  };
  }
  );
 
  results.push({
  shipmentId:
- `TC Shipment ${
- index + 1
- }`,
+ `TC Shipment ${index + 1}`,
  fields,
  });
  }
  );
 
- setComparisonResult(results);
+ setComparisonResult(
+ results
+ );
 
  } catch (err) {
 
@@ -458,7 +669,7 @@ function App() {
 
  setError(
  err.message ||
- 'Error while comparing documents'
+ 'Error comparing documents'
  );
 
  } finally {
@@ -480,7 +691,7 @@ function App() {
  Shipment Information Verification
  </h1>
 
- {/* Upload TC */}
+ {/* TC Upload */}
  <div className="mb-6">
 
  <label className="block text-sm font-semibold mb-2">
@@ -497,7 +708,7 @@ function App() {
  />
  </div>
 
- {/* Upload EWB */}
+ {/* EWAY Upload */}
  <div className="mb-6">
 
  <label className="block text-sm font-semibold mb-2">
@@ -507,15 +718,21 @@ function App() {
  <input
  type="file"
  accept=".pdf"
- onChange={handleEwayBillChange}
+ onChange={
+ handleEwayBillChange
+ }
  className="w-full border p-3 rounded"
  />
  </div>
 
- {/* Button */}
+ {/* BUTTON */}
  <button
- onClick={handleCompare}
- disabled={isLoading}
+ onClick={
+ handleCompare
+ }
+ disabled={
+ isLoading
+ }
  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded font-semibold"
  >
  {isLoading
@@ -523,22 +740,23 @@ function App() {
  : 'Compare Documents'}
  </button>
 
- {/* Loading */}
+ {/* LOADING */}
  {isLoading && (
  <div className="mt-6 text-blue-600 font-semibold">
  OCR Processing...
  </div>
  )}
 
- {/* Error */}
+ {/* ERROR */}
  {error && (
  <div className="mt-6 bg-red-100 text-red-700 p-4 rounded">
  {error}
  </div>
  )}
 
- {/* Results */}
- {comparisonResult.length > 0 && (
+ {/* RESULTS */}
+ {comparisonResult.length >
+ 0 && (
 
  <div className="mt-10">
 
@@ -547,7 +765,9 @@ function App() {
  </h2>
 
  {comparisonResult.map(
- (result) => (
+ (
+ result
+ ) => (
 
  <div
  key={
@@ -557,7 +777,9 @@ function App() {
  >
 
  <h3 className="text-xl font-semibold mb-3">
- {result.shipmentId}
+ {
+ result.shipmentId
+ }
  </h3>
 
  <table className="min-w-full border border-gray-300">
@@ -601,11 +823,15 @@ function App() {
  ]) => (
 
  <tr
- key={field}
+ key={
+ field
+ }
  >
 
  <td className="border p-3 font-medium">
- {field}
+ {
+ field
+ }
  </td>
 
  <td className="border p-3">
@@ -649,6 +875,7 @@ function App() {
  </div>
  )
  )}
+
  </div>
  )}
  </div>
