@@ -64,7 +64,7 @@ function App() {
  const page = await pdf.getPage(i);
 
  const viewport = page.getViewport({
- scale: 2,
+ scale: 3,
  });
 
  const canvas =
@@ -85,7 +85,10 @@ function App() {
  data: { text },
  } = await Tesseract.recognize(
  canvas,
- 'eng'
+ 'eng',
+ {
+ logger: m => console.log(m)
+ }
  );
 
  fullText += '\n' + text;
@@ -129,48 +132,50 @@ function App() {
 
  if (!value) return '';
 
- const match =
- value.match(/BTSale-\d+/i);
-
- return match
- ? match[0].trim()
- : value.trim();
+ return value
+ .replace(/\s/g, '')
+ .trim()
+ .toUpperCase();
  };
 
  // =========================================
- // PARSE SHIPMENT DATA
+ // CLEAN DOC NUMBER
  // =========================================
 
- const parseShipmentData = (text, docType) => {
+ const cleanDocNumber = (value) => {
+
+ if (!value) return '';
+
+ return value
+ .replace(/\s/g, '')
+ .replace(/[^0-9]/g, '')
+ .trim();
+ };
+
+ // =========================================
+ // PARSE TC
+ // =========================================
+
+ const parseTCData = (text) => {
 
  const shipments = [];
 
- // =====================================
- // TRANSACTION CERTIFICATE
- // =====================================
-
- if (docType === 'tc') {
-
- const shipmentBlocks = text.split(
- /(?=Shipment\s*No[\s:.,-]*\d+)/gi
+ const blocks = text.split(
+ /(?=Shipment\s*No)/gi
  );
 
- shipmentBlocks.forEach((block) => {
-
- if (!block.includes('Shipment')) {
- return;
- }
+ blocks.forEach((block) => {
 
  const shipment = {};
 
  // Shipment Date
  const dateMatch = block.match(
- /Shipment\s*Date[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+ /Shipment\s*Date[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})/i
  );
 
  if (dateMatch) {
  shipment.ShipmentDate =
- dateMatch[1].trim();
+ dateMatch[1];
  }
 
  // Shipment Doc No
@@ -180,22 +185,19 @@ function App() {
 
  if (docMatch) {
  shipment.ShipmentDocNo =
- docMatch[1]
- .replace(/\s/g, '')
- .trim();
+ cleanDocNumber(docMatch[1]);
  }
 
- // Invoice Reference
+ // Invoice
  const invoiceMatch = block.match(
  /Invoice\s*References?[:\s]*([A-Za-z0-9-]+)/i
  );
 
  if (invoiceMatch) {
  shipment.InvoiceReferences =
- invoiceMatch[1].trim();
+ cleanInvoice(invoiceMatch[1]);
  }
 
- // Push valid shipment
  if (
  shipment.ShipmentDate ||
  shipment.ShipmentDocNo ||
@@ -204,63 +206,38 @@ function App() {
  shipments.push(shipment);
  }
  });
- }
 
- // =====================================
- // E-WAY BILL
- // =====================================
+ return shipments;
+ };
 
- else {
+ // =========================================
+ // PARSE EWAY
+ // =========================================
 
- const ewayBlocks = text.split(
- /(?=E-Way\s*Bill\s*No[:\s]*)/gi
- );
+ const parseEwayData = (text) => {
 
- ewayBlocks.forEach((block) => {
+ const shipments = [];
 
- const shipment = {};
+ // Match each EWB block properly
+ const regex =
+ /E-Way\s*Bill\s*No[:\s]*([0-9\s]+)[\s\S]*?E-Way\s*Bill\s*Date[:\s|]*([0-9\/]+)[\s\S]*?Document\s*No\.?[:\s]*([A-Za-z0-9-]+)/gi;
 
- // EWB Number
- const billMatch = block.match(
- /E-Way\s*Bill\s*No[:\s]*([0-9\s]+)/i
- );
+ let match;
 
- if (billMatch) {
- shipment.ShipmentDocNo =
- billMatch[1]
- .replace(/\s/g, '')
- .trim();
- }
+ while ((match = regex.exec(text)) !== null) {
 
- // EWB Date
- const dateMatch = block.match(
- /E-Way\s*Bill\s*Date[:\s|]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
- );
+ const shipment = {
+ ShipmentDocNo:
+ cleanDocNumber(match[1]),
 
- if (dateMatch) {
- shipment.ShipmentDate =
- dateMatch[1].trim();
- }
+ ShipmentDate:
+ match[2].trim(),
 
- // Document No
- const invoiceMatch = block.match(
- /Document\s*No\.?[:\s]*([A-Za-z0-9-]+)/i
- );
+ InvoiceReferences:
+ cleanInvoice(match[3]),
+ };
 
- if (invoiceMatch) {
- shipment.InvoiceReferences =
- invoiceMatch[1].trim();
- }
-
- // Push valid shipment
- if (
- shipment.ShipmentDate ||
- shipment.ShipmentDocNo ||
- shipment.InvoiceReferences
- ) {
  shipments.push(shipment);
- }
- });
  }
 
  return shipments;
@@ -283,62 +260,29 @@ function App() {
  setError('');
  setComparisonResult([]);
 
- // OCR TC
+ // OCR
  const tcText =
  await extractTextFromPdf(
  transactionCertificate
  );
 
- // OCR EWAY
  const ewayText =
  await extractTextFromPdf(
  ewayBill
  );
 
- console.log(
- 'TC OCR TEXT:',
- tcText
- );
-
- console.log(
- 'EWAY OCR TEXT:',
- ewayText
- );
+ console.log('TC OCR:', tcText);
+ console.log('EWAY OCR:', ewayText);
 
  // Parse
  const tcShipments =
- parseShipmentData(
- tcText,
- 'tc'
- );
+ parseTCData(tcText);
 
  const ewayShipments =
- parseShipmentData(
- ewayText,
- 'eway'
- );
+ parseEwayData(ewayText);
 
- console.log(
- 'TC SHIPMENTS:',
- tcShipments
- );
-
- console.log(
- 'EWAY SHIPMENTS:',
- ewayShipments
- );
-
- if (tcShipments.length === 0) {
- throw new Error(
- 'No shipments found in Transaction Certificate'
- );
- }
-
- if (ewayShipments.length === 0) {
- throw new Error(
- 'No shipments found in E-Way Bill'
- );
- }
+ console.log('TC SHIPMENTS:', tcShipments);
+ console.log('EWAY SHIPMENTS:', ewayShipments);
 
  const fieldsToCompare = [
  'ShipmentDate',
@@ -351,18 +295,16 @@ function App() {
  tcShipments.forEach(
  (tcShipment, index) => {
 
- // Match by invoice number
+ // Match using invoice
  const matchedEway =
  ewayShipments.find(
  (eway) =>
  cleanInvoice(
  eway.InvoiceReferences
- )
- .toLowerCase() ===
+ ) ===
  cleanInvoice(
  tcShipment.InvoiceReferences
  )
- .toLowerCase()
  );
 
  const fields = {};
@@ -386,9 +328,10 @@ function App() {
  let ewayCompare =
  ewayOriginal;
 
- // Normalize date
+ // Normalize dates
  if (
- field === 'ShipmentDate'
+ field ===
+ 'ShipmentDate'
  ) {
  tcCompare =
  normalizeDate(
@@ -401,7 +344,23 @@ function App() {
  );
  }
 
- // Clean invoice
+ // Normalize doc no
+ if (
+ field ===
+ 'ShipmentDocNo'
+ ) {
+ tcCompare =
+ cleanDocNumber(
+ tcCompare
+ );
+
+ ewayCompare =
+ cleanDocNumber(
+ ewayCompare
+ );
+ }
+
+ // Normalize invoice
  if (
  field ===
  'InvoiceReferences'
@@ -419,10 +378,8 @@ function App() {
 
  const similarity =
  compareTwoStrings(
- tcCompare
- .toLowerCase(),
- ewayCompare
- .toLowerCase()
+ tcCompare.toLowerCase(),
+ ewayCompare.toLowerCase()
  );
 
  fields[field] = {
@@ -442,9 +399,7 @@ function App() {
 
  results.push({
  shipmentId:
- `TC Shipment ${
- index + 1
- }`,
+ `TC Shipment ${index + 1}`,
  fields,
  });
  }
@@ -522,13 +477,6 @@ function App() {
  ? 'Processing PDFs...'
  : 'Compare Documents'}
  </button>
-
- {/* Loading */}
- {isLoading && (
- <div className="mt-6 text-blue-600 font-semibold">
- OCR Processing...
- </div>
- )}
 
  {/* Error */}
  {error && (
