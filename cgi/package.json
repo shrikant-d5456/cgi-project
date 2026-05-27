@@ -16,6 +16,7 @@
     "pdfjs-dist": "^3.11.174",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-router-dom": "^7.15.1",
     "string-similarity": "^4.0.4",
     "tesseract.js": "^5.1.1"
   },
